@@ -238,7 +238,7 @@ int main() {
     double total_time = std::accumulate(times.begin(), times.end(), 0.0);
     double avg_time = total_time / times.size();
 
-    std::cout << "=== Sequential Baseline Results ===" << std::endl;
+    std::cout << "=== SIMD Results ===" << std::endl;
     std::cout << "Processed " << times.size() << " images." << std::endl;
     std::cout << "Total Boxes Processed: " << total_boxes_before << std::endl;
     std::cout << "Total Boxes Kept:      " << total_boxes_after << std::endl;
