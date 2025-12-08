@@ -118,6 +118,45 @@ std::vector<Box> nms_parallel(std::vector<Box>& boxes, float iou_threshold) {
     return kept_boxes;
 }
 
+
+std::vector<Box> nms_sequential(std::vector<Box>& boxes, float iou_threshold) {
+    if (boxes.empty()) return {};
+
+    // 1. Sort Descending
+    std::sort(boxes.begin(), boxes.end(), [](const Box& a, const Box& b) {
+        return a.score > b.score;
+    });
+
+    std::vector<Box> kept_boxes;
+    // We use a simple vector<bool> here because this function runs 
+    // strictly inside one thread. No race conditions possible.
+    std::vector<uint8_t> suppressed(boxes.size(), 0);
+
+    for (size_t i = 0; i < boxes.size(); ++i) {
+        if (suppressed[i]) continue;
+
+        kept_boxes.emplace_back(boxes[i]);
+
+        for (size_t j = i + 1; j < boxes.size(); ++j) {
+            if (suppressed[j]) continue;
+            
+            // Class check
+            if (boxes[i].class_id != boxes[j].class_id) continue;
+            
+            // Geometric optimization: Don't compute IoU if boxes don't touch
+            if (boxes[j].x1 > boxes[i].x2 || boxes[i].x1 > boxes[j].x2 || 
+                boxes[j].y1 > boxes[i].y2 || boxes[i].y1 > boxes[j].y2) {
+                continue;
+            }
+
+            if (computeIoU(boxes[i], boxes[j]) > iou_threshold) {
+                suppressed[j] = 1;
+            }
+        }
+    }
+    return kept_boxes;
+}
+
 std::vector<Box> load_boxes(const std::string& filepath) {
     /*
     Helper function to load bounding boxes from a binary file
@@ -145,54 +184,66 @@ std::vector<Box> load_boxes(const std::string& filepath) {
     return boxes;
 }
 
-int main() {
-    std::string input_folder = "coco_val_bins";
-    float iou_thresh = 0.5f;    
-    float conf_thresh = 0.0f;  
+int main(int argc, char* argv[]) {
+    if (argc < 2) {
+        std::cout << "Usage: " << argv[0] << " <path to data folder>" << std::endl;
+        return 1;
+    }
 
-    std::vector<double> times;
-    int total_boxes_before = 0;
-    int total_boxes_after = 0;
+    std::string input_folder = argv[1];
+    float iou_thresh = 0.5f;    
 
     if (!fs::exists(input_folder)) {
         std::cerr << "Folder not found!" << std::endl;
         return 1;
     }
 
+    std::vector<std::string> file_paths;
     for (const auto& entry : fs::directory_iterator(input_folder)) {
         if (entry.path().extension() == ".bin") {
-            std::vector<Box> boxes = load_boxes(entry.path().string());
-            
-            std::vector<Box> filtered_boxes;
-            filtered_boxes.reserve(boxes.size());
-            for(const auto& b : boxes) {
-                if(b.score >= conf_thresh) filtered_boxes.push_back(b);
-            }
-
-            auto start = std::chrono::high_resolution_clock::now();
-            std::vector<Box> result = nms_parallel(filtered_boxes, iou_thresh);
-            auto end = std::chrono::high_resolution_clock::now();
-
-            std::chrono::duration<double, std::milli> duration = end - start;
-            times.push_back(duration.count());
-
-            total_boxes_before += filtered_boxes.size();
-            total_boxes_after += result.size();
+            file_paths.push_back(entry.path().string());
         }
     }
 
-    if (times.empty()) return 0;
+    std::atomic<long long> total_boxes_before{0};
+    std::atomic<long long> total_boxes_after{0};
 
-    double total_time = std::accumulate(times.begin(), times.end(), 0.0);
-    double avg_time = total_time / times.size();
+    auto start_total = std::chrono::high_resolution_clock::now();
+
+    tbb::parallel_for(tbb::blocked_range<size_t>(0, file_paths.size()), 
+        [&](const tbb::blocked_range<size_t>& r) {
+            
+            // Local accumulators to minimize atomic contention
+            long long local_before = 0;
+            long long local_after = 0;
+
+            for (size_t i = r.begin(); i != r.end(); ++i) {
+                // A. Load
+                std::vector<Box> boxes = load_boxes(file_paths[i]);
+                
+                local_before += boxes.size();
+
+                // C. Sequential NMS
+                std::vector<Box> result = nms_sequential(boxes, iou_thresh);
+                
+                local_after += result.size();
+            }
+
+            // Update globals safely once per block
+            total_boxes_before += local_before;
+            total_boxes_after += local_after;
+        }
+    );
+
+    auto end_total = std::chrono::high_resolution_clock::now();
+
+    double total_time = std::chrono::duration<double, std::milli>(end_total - start_total).count();
 
     std::cout << "=== TBB Results ===" << std::endl;
-    std::cout << "Processed " << times.size() << " images." << std::endl;
+    std::cout << "Processed " << file_paths.size() << " images." << std::endl;
     std::cout << "Total Boxes Processed: " << total_boxes_before << std::endl;
     std::cout << "Total Boxes Kept:      " << total_boxes_after << std::endl;
-    std::cout << "Average Time per Image: " << avg_time << " ms" << std::endl;
     std::cout << "Total Time:             " << total_time << " ms" << std::endl;
-
 
     return 0;
 }

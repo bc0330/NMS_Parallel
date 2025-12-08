@@ -188,61 +188,49 @@ std::vector<Box> load_boxes(const std::string& filepath) {
     return boxes;
 }
 
-int main() {
-    std::string input_folder = "coco_val_bins";
-    float iou_thresh = 0.5f;    
-    float conf_thresh = 0.0f;  
-
-    std::vector<double> times;
-    int total_boxes_before = 0;
-    int total_boxes_after = 0;
-
-    if (!fs::exists(input_folder)) {
-        std::cerr << "Folder not found: " << input_folder << std::endl;
+int main(int argc, char* argv[]) {
+    if (argc < 2) {
+        std::cout << "Usage: " << argv[0] << " <path to data folder>" << std::endl;
         return 1;
     }
 
+    std::string input_folder = argv[1];
+    float iou_thresh = 0.5f;    
+
+    if (!fs::exists(input_folder)) {
+        std::cerr << "Folder not found!" << std::endl;
+        return 1;
+    }
+
+    std::vector<std::string> file_paths;
     for (const auto& entry : fs::directory_iterator(input_folder)) {
         if (entry.path().extension() == ".bin") {
-            std::vector<Box> boxes = load_boxes(entry.path().string());
-            
-            // Optional: Pre-filtering low confidence boxes
-            // (This is usually done before NMS to save time)
-            std::vector<Box> filtered_boxes;
-            filtered_boxes.reserve(boxes.size());
-            for(const auto& b : boxes) {
-                if(b.score >= conf_thresh) filtered_boxes.push_back(b);
-            }
-
-            // --- BENCHMARK START ---
-            auto start = std::chrono::high_resolution_clock::now();
-            
-            std::vector<Box> result = nms_simd(filtered_boxes, iou_thresh);
-            
-            auto end = std::chrono::high_resolution_clock::now();
-            // --- BENCHMARK END ---
-
-            std::chrono::duration<double, std::milli> duration = end - start;
-            times.push_back(duration.count());
-
-            total_boxes_before += filtered_boxes.size();
-            total_boxes_after += result.size();
+            file_paths.push_back(entry.path().string());
         }
     }
 
-    if (times.empty()) {
-        std::cout << "No files processed." << std::endl;
-        return 0;
+    long long total_boxes_before = 0;
+    long long total_boxes_after = 0;
+
+    auto start_total = std::chrono::high_resolution_clock::now();
+
+    for (size_t i = 0; i < file_paths.size(); ++i) {
+        std::vector<Box> boxes = load_boxes(file_paths[i]);
+        
+        std::vector<Box> result = nms_simd(boxes, iou_thresh);
+
+        total_boxes_before += boxes.size();
+        total_boxes_after += result.size();
     }
 
-    double total_time = std::accumulate(times.begin(), times.end(), 0.0);
-    double avg_time = total_time / times.size();
+    auto end_total = std::chrono::high_resolution_clock::now();
+
+    double total_time = std::chrono::duration<double, std::milli>(end_total - start_total).count();
 
     std::cout << "=== SIMD Results ===" << std::endl;
-    std::cout << "Processed " << times.size() << " images." << std::endl;
+    std::cout << "Processed " << file_paths.size() << " images." << std::endl;
     std::cout << "Total Boxes Processed: " << total_boxes_before << std::endl;
     std::cout << "Total Boxes Kept:      " << total_boxes_after << std::endl;
-    std::cout << "Average Time per Image: " << avg_time << " ms" << std::endl;
     std::cout << "Total Time:             " << total_time << " ms" << std::endl;
 
     return 0;

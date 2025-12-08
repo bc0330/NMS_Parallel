@@ -1,3 +1,5 @@
+// try to implement Non-Maximum Suppression using SIMD and TBB for parallelism
+// but found that it is slower than pure SIMD version
 #include <iostream>
 #include <vector>
 #include <algorithm>
@@ -6,10 +8,11 @@
 #include <chrono>
 #include <filesystem>
 #include <numeric>
+#include <tbb/parallel_for.h>
+#include <tbb/blocked_range.h>
 
 namespace fs = std::filesystem;
 
-// Bounding Box structure
 struct Box {
     float x1, y1, x2, y2;
     float score;
@@ -44,38 +47,72 @@ inline float computeIoU(const Box& a, const Box& b) {
 }
 
 
-std::vector<Box> nms_sequential(std::vector<Box>& boxes, float iou_threshold) {
+std::vector<Box> nms_parallel(std::vector<Box>& boxes, float iou_threshold) {
     /*
-        The sequential version of the NMS algorithm
+        The TBB version of the NMS algorithm
     */
-
     if (boxes.empty()) return {};
 
-    // Step 1: Sort boxes by score (Descending)
-    std::sort(boxes.begin(), boxes.end(), [](const Box& a, const Box& b) {
+    sort(boxes.begin(), boxes.end(), [](const Box& a, const Box& b) {
         return a.score > b.score;
     });
 
-    std::vector<Box> kept_boxes;                        // the final selected set of bboxes
-    std::vector<bool> suppressed(boxes.size(), false);
+    size_t n = boxes.size();
+    
+    // 2. Prepare Bit Matrix
+    int col_blocks = (n + 63) / 64;
+    std::vector<uint64_t> conflict(static_cast<size_t>(n) * col_blocks, 0);
 
-    // Step 2: Iterate through the boxes 
-    for (size_t i = 0; i < boxes.size(); ++i) {
+    // 3. Parallel Conflict Detection using TBB
+    tbb::parallel_for(tbb::blocked_range<size_t>(0, n), 
+        [&](const tbb::blocked_range<size_t>& r) {
+            // Iterate over the range assigned to this task
+            for (size_t i = r.begin(); i != r.end(); ++i) {
+                uint64_t *row_ptr = &conflict[i * col_blocks];
+
+                // Inner loop performs comparisons
+                for (size_t j = i + 1; j < n; ++j) {
+                    if (boxes[i].class_id != boxes[j].class_id) continue;
+
+                    if (computeIoU(boxes[i], boxes[j]) > iou_threshold) {
+                        size_t col_block = j / 64;
+                        size_t bit_pos = j % 64;
+
+                        row_ptr[col_block] |= (1ULL << bit_pos);
+                    }
+                }
+            }
+        }
+    );
+
+    // 4. Sequential Reduction
+    std::vector<uint8_t> suppressed(n, 0);
+    std::vector<Box> kept_boxes;
+    kept_boxes.reserve(n);
+
+    for (size_t i = 0; i < n; ++i) {
         if (suppressed[i]) continue;
 
-        kept_boxes.push_back(boxes[i]);
+        kept_boxes.emplace_back(boxes[i]);
 
-        // Check it against all subsequent boxes
-        for (size_t j = i + 1; j < boxes.size(); ++j) {
-            if (suppressed[j]) continue;
+        // Process conflicts for box i
+        uint64_t *row_ptr = &conflict[i * col_blocks];
+        int start_block = i / 64;
 
-            // CLASS-AWARE CHECK:
-            // If they are different classes (e.g., Cat vs Dog), do not suppress
-            if (boxes[i].class_id != boxes[j].class_id) continue;
+        for (int b = start_block; b < col_blocks; ++b) {
+            uint64_t block = row_ptr[b];
+            if (block == 0) continue;
 
-            // If overlap is high, suppress the lower score box (j)
-            if (computeIoU(boxes[i], boxes[j]) > iou_threshold) {
-                suppressed[j] = true;
+            while (block) {
+                int bit_pos = __builtin_ctzll(block); // Count Trailing Zeros
+                size_t j = static_cast<size_t>(b) * 64 + bit_pos;
+
+                if (j > i && j < n) {
+                    suppressed[j] = 1;
+                }
+                
+                // Clear the bit
+                block &= ~(1ULL << bit_pos);
             }
         }
     }
@@ -88,16 +125,24 @@ std::vector<Box> load_boxes(const std::string& filepath) {
     Helper function to load bounding boxes from a binary file
     */
     std::ifstream file(filepath, std::ios::binary);
-    if (!file.is_open()) {
-        std::cerr << "Error opening " << filepath << std::endl;
-        return {};
-    }
+    if (!file.is_open()) return {};
 
     int num_boxes;
     file.read(reinterpret_cast<char*>(&num_boxes), sizeof(int));
 
     std::vector<Box> boxes(num_boxes);
-    file.read(reinterpret_cast<char*>(boxes.data()), num_boxes * sizeof(Box));
+    
+    std::vector<float> buffer(num_boxes * 6);
+    file.read(reinterpret_cast<char*>(buffer.data()), buffer.size() * sizeof(float));
+
+    for(int i=0; i<num_boxes; ++i) {
+        boxes[i].x1       = buffer[i*6 + 0];
+        boxes[i].y1       = buffer[i*6 + 1];
+        boxes[i].x2       = buffer[i*6 + 2];
+        boxes[i].y2       = buffer[i*6 + 3];
+        boxes[i].score    = buffer[i*6 + 4];
+        boxes[i].class_id = buffer[i*6 + 5];
+    }
     
     return boxes;
 }
@@ -131,7 +176,7 @@ int main(int argc, char* argv[]) {
     for (size_t i = 0; i < file_paths.size(); ++i) {
         std::vector<Box> boxes = load_boxes(file_paths[i]);
         
-        std::vector<Box> result = nms_sequential(boxes, iou_thresh);
+        std::vector<Box> result = nms_parallel(boxes, iou_thresh);
 
         total_boxes_before += boxes.size();
         total_boxes_after += result.size();
@@ -141,7 +186,7 @@ int main(int argc, char* argv[]) {
 
     double total_time = std::chrono::duration<double, std::milli>(end_total - start_total).count();
 
-    std::cout << "=== Sequential Results ===" << std::endl;
+    std::cout << "=== TBB Old Results ===" << std::endl;
     std::cout << "Processed " << file_paths.size() << " images." << std::endl;
     std::cout << "Total Boxes Processed: " << total_boxes_before << std::endl;
     std::cout << "Total Boxes Kept:      " << total_boxes_after << std::endl;

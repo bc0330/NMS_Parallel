@@ -1,2 +1,4 @@
 coco_val_bins/
+coco_train_bins/
+*.gz
 *.out
