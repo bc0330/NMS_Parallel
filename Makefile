@@ -5,7 +5,7 @@ NVCC = nvcc
 NVCCFLAGS = -O3 -arch=sm_61 -std=c++17 -Xcompiler -mavx2
 LDFLAGS = -fopenmp
 
-all: nms_seq nms_simd nms_omp nms_cuda_naive nms_cuda_opt nms_cuda_ultimate # nms_tbb nms_simd_tbb nms_tbb_old nms_simd_tbb_old
+all: nms_seq nms_simd nms_omp nms_tbb nms_simd_tbb nms_tbb_old nms_simd_tbb_old nms_cuda_naive nms_cuda_opt nms_cuda_ultimate
 
 nms_seq: nms_seq.cpp
 	$(CXX) $(CXXFLAGS) -o nms_seq.out nms_seq.cpp
@@ -25,17 +25,17 @@ nms_cuda_opt: nms_cuda_opt.cu
 nms_cuda_ultimate: nms_cuda_ultimate.cu
 	$(NVCC) $(NVCCFLAGS) -o nms_cuda_ultimate.out nms_cuda_ultimate.cu
 
-# nms_tbb: nms_tbb.cpp
-# 	$(CXX) $(CXXFLAGS) nms_tbb.cpp -o nms_tbb.out $$(pkg-config --cflags --libs tbb)
+nms_tbb: nms_tbb.cpp
+	$(CXX) $(CXXFLAGS) nms_tbb.cpp -o nms_tbb.out $$(pkg-config --cflags --libs tbb)
 
-# nms_simd_tbb: nms_simd_tbb.cpp
-# 	$(CXX) $(CXXFLAGS) -mavx2 nms_simd_tbb.cpp -o nms_simd_tbb.out $$(pkg-config --cflags --libs tbb)
+nms_simd_tbb: nms_simd_tbb.cpp
+	$(CXX) $(CXXFLAGS) -mavx2 nms_simd_tbb.cpp -o nms_simd_tbb.out $$(pkg-config --cflags --libs tbb)
 
-# nms_tbb_old: nms_tbb_old.cpp
-# 	$(CXX) $(CXXFLAGS) nms_tbb_old.cpp -o nms_tbb_old.out $$(pkg-config --cflags --libs tbb)
+nms_tbb_old: nms_tbb_old.cpp
+	$(CXX) $(CXXFLAGS) nms_tbb_old.cpp -o nms_tbb_old.out $$(pkg-config --cflags --libs tbb)
 
-# nms_simd_tbb_old: nms_simd_tbb_old.cpp
-# 	$(CXX) $(CXXFLAGS) -mavx2 nms_simd_tbb_old.cpp -o nms_simd_tbb_old.out $$(pkg-config --cflags --libs tbb)
+nms_simd_tbb_old: nms_simd_tbb_old.cpp
+	$(CXX) $(CXXFLAGS) -mavx2 nms_simd_tbb_old.cpp -o nms_simd_tbb_old.out $$(pkg-config --cflags --libs tbb)
 
 clean:
 	rm -f nms_seq.out nms_simd.out nms_omp.out nms_tbb.out nms_simd_tbb.out nms_tbb_old.out nms_simd_tbb_old.out nms_cuda_naive.out nms_cuda_opt.out nms_cuda_ultimate.out
@@ -77,11 +77,11 @@ run_remote_simd:
 run_remote_omp:
 	$(call REMOTE_RUN,run -c $(CORES) -- ./nms_omp.out coco_val_bins)
 
-# run_remote_tbb:
-# 	$(call REMOTE_RUN,run -c $(CORES) -- ./nms_tbb.out coco_val_bins)
+run_remote_tbb:
+	$(call REMOTE_RUN,run -c $(CORES) -- ./nms_tbb.out coco_val_bins)
 
-# run_remote_simd_tbb:
-# 	$(call REMOTE_RUN,run -c $(CORES) -- ./nms_simd_tbb.out coco_val_bins)
+run_remote_simd_tbb:
+	$(call REMOTE_RUN,run -c $(CORES) -- ./nms_simd_tbb.out coco_val_bins)
 
 # Note: nms_mpi.out must be compiled separately or added to the build targets
 run_remote_mpi:

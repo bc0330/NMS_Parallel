@@ -10,11 +10,13 @@ TARGETS = [
     {"name": "OpenMP (1 core)", "target": "run_remote_omp CORES=1", "enabled": True},
     {"name": "OpenMP (2 cores)","target": "run_remote_omp CORES=2", "enabled": True},
     {"name": "OpenMP (4 cores)","target": "run_remote_omp CORES=4", "enabled": True},
+    {"name": "TBB (1 core)",    "target": "run_remote_tbb CORES=1", "enabled": True},
+    {"name": "TBB (2 cores)",   "target": "run_remote_tbb CORES=2", "enabled": True},
+    {"name": "TBB (4 cores)",   "target": "run_remote_tbb CORES=4", "enabled": True},
+    {"name": "SIMD+TBB (4 cores)", "target": "run_remote_simd_tbb CORES=4", "enabled": True},
     {"name": "CUDA Naive",      "target": "run_remote_cuda_naive",  "enabled": True},
     {"name": "CUDA Optimized",  "target": "run_remote_cuda_opt",    "enabled": True},
     {"name": "CUDA Ultimate",   "target": "run_remote_cuda_ultimate","enabled": True},
-    # To enable TBB, uncomment the lines below and ensure the targets exist in Makefile
-    # {"name": "TBB (4 cores)",   "target": "run_remote_tbb CORES=4", "enabled": False},
 ]
 
 def run_target(target_name, make_target, ccid=None):
